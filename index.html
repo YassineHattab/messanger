@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Ultra Realtime</title>
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <style>
+        /* --- DESIGN WHATSAPP --- */
+        :root { 
+            --wa-green: #00a884; 
+            --wa-bg: #efeae2; 
+            --wa-msg-out: #d9fdd3; 
+            --wa-dark: #111b21;
+        }
+
+        body, html { height: 100%; margin: 0; font-family: 'Segoe UI', Helvetica, sans-serif; background: #222; }
+
+        .app-container { 
+            display: flex; flex-direction: column; height: 100vh; max-width: 600px; 
+            margin: 0 auto; background: var(--wa-bg); border-left: 1px solid #ddd; border-right: 1px solid #ddd;
+        }
+
+        /* Header */
+        header { 
+            background: #f0f2f5; padding: 10px 15px; display: flex; align-items: center; 
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1); z-index: 10;
+        }
+        .header-info { flex: 1; margin-left: 15px; }
+        .header-info h4 { margin: 0; font-size: 15px; }
+        .header-info span { font-size: 12px; color: #667781; }
+
+        /* Chat Area */
+        #chat-box { 
+            flex: 1; overflow-y: auto; padding: 15px; display: flex; 
+            flex-direction: column; gap: 6px; background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png');
+        }
+
+        /* Bubbles */
+        .msg { 
+            max-width: 75%; padding: 6px 9px; border-radius: 8px; font-size: 14.5px; 
+            position: relative; box-shadow: 0 1px 1px rgba(0,0,0,0.15); line-height: 1.4;
+        }
+        .msg.sent { align-self: flex-end; background: var(--wa-msg-out); border-top-right-radius: 0; }
+        .msg.received { align-self: flex-start; background: white; border-top-left-radius: 0; }
+
+        .user-tag { font-weight: bold; font-size: 11px; color: #db5e5e; display: block; margin-bottom: 2px; }
+        .time { font-size: 10px; color: #667781; float: right; margin-top: 5px; margin-left: 10px; }
+        .chat-img { width: 100%; border-radius: 6px; margin-bottom: 5px; cursor: pointer; }
+
+        /* Input Footer */
+        footer { background: #f0f2f5; padding: 10px; display: flex; align-items: center; gap: 8px; }
+        .input-wrapper { 
+            flex: 1; background: white; border-radius: 25px; padding: 5px 15px; 
+            display: flex; align-items: center; border: 1px solid #ddd;
+        }
+        input { border: none; outline: none; padding: 8px; font-size: 15px; flex: 1; }
+        #pseudo-input { width: 70px; border-right: 1px solid #eee; font-weight: bold; color: var(--wa-green); }
+
+        .btn-circle { 
+            background: var(--wa-green); color: white; border: none; 
+            border-radius: 50%; width: 45px; height: 45px; cursor: pointer; 
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        /* Loading Overlay */
+        #loader { display: none; color: var(--wa-green); font-size: 12px; text-align: center; padding: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="app-container">
+    <header>
+        <span class="material-icons" style="color:#54656f">account_circle</span>
+        <div class="header-info">
+            <h4>Groupe Public Realtime</h4>
+            <span id="online-status">En ligne</span>
+        </div>
+        <span class="material-icons" style="color:#54656f">search</span>
+    </header>
+
+    <div id="chat-box"></div>
+    <div id="loader">Envoi en cours...</div>
+
+    <footer>
+        <label class="material-icons" style="color:#54656f; cursor:pointer">
+            attach_file
+            <input type="file" id="file-selector" style="display:none" accept="image/*">
+        </label>
+        
+        <div class="input-wrapper">
+            <input type="text" id="pseudo-input" placeholder="Pseudo">
+            <input type="text" id="msg-input" placeholder="Message">
+        </div>
+
+        <button class="btn-circle" onclick="processSend()">
+            <span class="material-icons">send</span>
+        </button>
+    </footer>
+</div>
+
+<script type="module">
+    // --- IMPORT FIREBASE ---
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getDatabase, ref, push, onChildAdded, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+    import { getStorage, ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
+
+    // 1. CONFIGURATION (REMPLACE ICI)
+    const firebaseConfig = {
+        apiKey: "TON_API_KEY",
+        authDomain: "TON_PROJET.firebaseapp.com",
+        databaseURL: "https://TON_PROJET-default-rtdb.firebaseio.com",
+        projectId: "TON_PROJET",
+        storageBucket: "TON_PROJET.appspot.com",
+        messagingSenderId: "TON_ID",
+        appId: "TON_APP_ID"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const storage = getStorage(app);
+    
+    const chatBox = document.getElementById('chat-box');
+    const msgInput = document.getElementById('msg-input');
+    const pseudoInput = document.getElementById('pseudo-input');
+    const fileSelector = document.getElementById('file-selector');
+    const loader = document.getElementById('loader');
+
+    // Charger le dernier pseudo utilisé
+    pseudoInput.value = localStorage.getItem('chat_name') || "";
+
+    // 2. LOGIQUE D'ENVOI
+    window.processSend = async function() {
+        const name = pseudoInput.value.trim() || "Anonyme";
+        const text = msgInput.value.trim();
+        const file = fileSelector.files[0];
+
+        if (!text && !file) return; // Rien à envoyer
+
+        localStorage.setItem('chat_name', name);
+        loader.style.display = 'block';
+
+        let url = null;
+
+        try {
+            // Upload Image si présente
+            if (file) {
+                const path = `uploads/${Date.now()}_${file.name}`;
+                const storageReference = sRef(storage, path);
+                const uploadTask = await uploadBytes(storageReference, file);
+                url = await getDownloadURL(uploadTask.ref);
+            }
+
+            // Push Database
+            push(ref(db, 'messages'), {
+                user: name,
+                text: text,
+                image: url,
+                time: serverTimestamp()
+            });
+
+            // Reset
+            msgInput.value = "";
+            fileSelector.value = "";
+            loader.style.display = 'none';
+        } catch (error) {
+            alert("Erreur: " + error.message);
+            loader.style.display = 'none';
+        }
+    };
+
+    // 3. LOGIQUE DE RÉCEPTION (REALTIME)
+    onChildAdded(ref(db, 'messages'), (snap) => {
+        const data = snap.val();
+        const isMe = data.user === pseudoInput.value;
+        const timestamp = data.time ? new Date(data.time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "à l'instant";
+
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `msg ${isMe ? 'sent' : 'received'}`;
+        
+        msgDiv.innerHTML = `
+            <span class="user-tag" style="${isMe ? 'display:none' : ''}">${data.user}</span>
+            ${data.image ? `<img src="${data.image}" class="chat-img" onclick="window.open('${data.image}')">` : ''}
+            <span>${data.text}</span>
+            <span class="time">${timestamp}</span>
+        `;
+        
+        chatBox.appendChild(msgDiv);
+        chatBox.scrollTop = chatBox.scrollHeight; // Scroll vers le bas
+    });
+
+    // Envoyer avec la touche Entrée
+    msgInput.addEventListener("keypress", (e) => { if (e.key === "Enter") processSend(); });
+
+</script>
+</body>
+</html>
